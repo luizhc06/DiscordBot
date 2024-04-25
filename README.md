@@ -2,7 +2,7 @@
 
 _O bot foi feito com ChatGPT 3.5, por enquanto está simples mas pretendo alterar futuramente..._
 
-#Regras antes de usar:
+**Regras antes de usar:**
 
 apague as mensagens apos o bot responder.
 
