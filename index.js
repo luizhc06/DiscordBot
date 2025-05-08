@@ -1,8 +1,12 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Collections, Partials, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, Partials, Events } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { format } = require('date-fns');
+const colors = require('colors'); // Opcional: para cores no console
 
+// --- CONFIGURAÇÃO INICIAL ---
+const PREFIX = '|';
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -10,51 +14,106 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
     ],
-    partials: [
-        Partials.Message,
-        Partials.Channel,
-        Partials.Reaction,
-    ],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
+client.commands = new Collection();
 
-client.commands = new Collections();
-
-//carregar comandos
-
-const commandFiles = fs.readdirSync(path.join(__dirname, 'commands')).filter(file => file.endsWith('.js'));
-for (const file of commandFiles) {
-    const command = require(`./commands/${file}`);
-    client.commands.set(command.name, command);
-}
-
-//carregar eventos
-client.once(Events.MessageCreate, async message => {
-    if (!message.content.startsWith("!" || message.author.bot)) return;
+// --- SISTEMA DE LOGS ---
+const log = (message, type = 'info') => {
+    const timestamp = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
+    const logMessage = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
     
-    const args = message.content.slice(1).split(/ +/);
+    // Cores no console (opcional)
+    const coloredLog = {
+        'INFO': colors.gray(logMessage),
+        'SUCCESS': colors.green(logMessage),
+        'WARN': colors.yellow(logMessage),
+        'ERROR': colors.red(logMessage),
+    }[type.toUpperCase()] || logMessage;
+
+    console.log(coloredLog);
+    fs.appendFileSync('logs.txt', logMessage + '\n'); // Salva em arquivo
+};
+
+// --- CARREGAMENTO DE COMANDOS ---
+const loadCommands = () => {
+    const commandFolders = ['fun', 'modding', 'roles', 'utils'];
+    
+    commandFolders.forEach(folder => {
+        const folderPath = path.join(__dirname, 'commands', folder);
+        if (!fs.existsSync(folderPath)) {
+            log(`Pasta de comandos não encontrada: ${folder}`, 'warn');
+            return;
+        }
+
+        const commandFiles = fs.readdirSync(folderPath).filter(file => file.endsWith('.js'));
+        commandFiles.forEach(file => {
+            const commandPath = path.join(folderPath, file);
+            try {
+                const command = require(commandPath);
+                if (command.name) {
+                    client.commands.set(command.name, command);
+                    log(`Comando carregado: ${command.name.padEnd(15)} (${file})`, 'success');
+                }
+            } catch (error) {
+                log(`Falha ao carregar ${file}: ${error.message}`, 'error');
+            }
+        });
+    });
+};
+
+loadCommands();
+
+// --- EVENTOS DO BOT ---
+
+// Mensagens com prefixo
+client.on(Events.MessageCreate, message => {
+    if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+
+    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const commandName = args.shift().toLowerCase();
     const command = client.commands.get(commandName);
 
-    if (command) return;
+    if (!command) {
+        log(`Comando não encontrado: "${commandName}" (${message.author.tag})`, 'warn');
+        return message.reply('Comando não encontrado. Use `|ajuda` para ver a lista.');
+    }
+
     try {
-        await command.execute(message, args);
+        command.execute(message, args);
+        log(`Comando executado: ${commandName.padEnd(15)} (${message.author.tag})`, 'info');
     } catch (error) {
-        console.error(error);
-        await message.reply({ content: 'Houve um erro ao executar esse comando!', ephemeral: true });
-    }});
-
-//sistema de menu (cores)
-const colorRoles = require('./menus/colorRoles.json');
-client.on(Events.InteractionCreate, async interaction => {
-    if (!interaction.isStringSelectMenu()) {
-        await colorRoles.handle(interaction);
-    }});
-
-client.once(Events.ClientReady, () => {
-    console.log(`Bot online como: ${client.user.tag}`);
-    client.user.setActivity('!ajuda', { type: 'LISTENING' });
+        log(`ERRO no comando ${commandName}: ${error.stack}`, 'error');
+        message.reply('❌ Ocorreu um erro ao executar este comando.');
+    }
 });
-client.login(process.env.TOKEN)
-    .then(() => console.log('Bot conectado com sucesso!'))
-    .catch(err => console.error('Erro ao conectar o bot:', err));
 
+// Interações (slash commands)
+client.on(Events.InteractionCreate, async interaction => {
+    if (!interaction.isCommand()) return;
+
+    const command = client.commands.get(interaction.commandName);
+    if (!command) {
+        log(`Interação não registrada: ${interaction.commandName}`, 'warn');
+        return;
+    }
+
+    try {
+        await command.execute(interaction);
+        log(`Interação executada: ${interaction.commandName.padEnd(15)} (${interaction.user.tag})`, 'info');
+    } catch (error) {
+        log(`ERRO na interação ${interaction.commandName}: ${error.stack}`, 'error');
+        await interaction.reply({ content: '❌ Erro interno.', ephemeral: true });
+    }
+});
+
+// Bot pronto
+client.once(Events.ClientReady, () => {
+    log(`Bot online como: ${client.user.tag}`, 'success');
+    client.user.setActivity(`${PREFIX}ajuda`, { type: 'LISTENING' });
+});
+
+// Login
+client.login(process.env.TOKEN)
+    .then(() => log('Conectado ao Discord!', 'success'))
+    .catch(err => log(`FALHA NA CONEXÃO: ${err.message}`, 'error'));
